@@ -1,0 +1,808 @@
+/***** AquarianAge Alternative Support Tool *****/
+/**** Deck editor - rousers ****/
+
+#include "header.as"
+
+;WindowID
+;MainWindow = メインウィンドウ（カードリストウィンドウ）
+;CardInfoWindow = カード情報ウィンドウ
+;DeckWindow = デッキウィンドウ
+;FilteringSettingWindow = フィルタ設定
+;SearchSettingWindow = 検索設定
+;ProgressWindow = 進捗状況（カードリスト処理）
+
+*initialize
+	initComctl	;コモンコントロール初期化
+
+	screen MainWindow, 640, 480, 2, 50, 50
+	title "カードリスト - rousers"
+	hMainWindow = hWnd
+	screen CardInfoWindow, 400, 240, 2 + 4 + 8, ginfo_wx2 + 10, ginfo_wy1
+	title "カード情報 - rousers"
+	hCardInfoWindow = hWnd
+;	screen 3, 400, 320, 2 + 4 + 8, ginfo_wx1, ginfo_wy2+10
+	screen DeckWindow, 400, 362, 2 + 4 + 8, ginfo_wx1, ginfo_wy2+10
+	title "デッキ - rousers"
+	hDeckWindow = hWnd
+	screen FilteringSettingWindow, 300, 300, 2 + 4 + 8
+	title "フィルタ設定 - rousers"
+	hFilteringSettingWindow = hWnd
+	screen SearchSettingWindow, 300, 200, 2 + 4 + 8
+	title "検索設定 - rousers"
+	hSearchSettingWindow = hWnd
+	screen ProgressWindow, 640, 20, 4 + 8, (ginfo_dispx-640)/2, (ginfo_dispy-20)/2
+	title "カードリスト処理中 - rousers"
+	hProgressWindow = hWnd
+
+
+*declareVariable	;変数
+	sdim configBuffer				;設定バッファ
+	sdim cardlistBuffer				;カードリストバッファ
+	sdim searchResult				;CSV検索結果バッファ
+	sdim cardInfo, 512, 17			;カード情報バッファ
+	sdim selectedCardInfo, 512, 17	;選択されたカードの情報バッファ
+	dim cardDataId, 16				;カード情報ウィンドウのオブジェクトID
+	pastSelectedItem = -1			;前回のチェックで選択されていたアイテムのインデックス
+	energyAverage = 0				;コスト平均（総計）
+	energyAverageWithoutAlteration = 0	;コスト平均（オルタなし）
+	dim NoOfDeckClassifiedInfluence, 6	;勢力別のデッキ内カード数
+	NoOfDeckInfluence = 0			;デッキ内の勢力数
+	energyBalance = ""				;コストバランス
+	increaseEnergyNatural = 0.12	;１カウント当たりの自然増加量
+	searchKeyword = ""				;検索キーワード
+	searchMode = 0					;検索モード（0 = 完全一致 / 1 = 前方一致）
+	startingIndex = 0				;検索開始インデックス
+
+
+*loadConfigure		;設定読み込み
+	exist "data.txt"		;存在確認
+	if strsize != -1 {
+		notesel configBuffer
+		noteget cardlistFilename, 0
+	} else {
+		logmes "Data file\"data.txt\" is not found. rousers is using default configure."
+		cardlistFilename = "AquarianAgeAlternative-CardList.csv"
+	}
+	noteunsel
+
+	exist cardlistFilename
+	if ( strsize == -1 ) {
+		cardlistFilename = "aaa-cardlist.csv"
+		exist cardlistFilename
+		if ( strsize == -1 ) {
+			gsel MainWindow, 1
+			dialog "カードリストが見つかりませんでした。", 1, "読み込み失敗"
+			end
+		}
+	}
+
+
+*loadCardlist		;カードリスト読み込み
+	notesel cardlistBuffer
+	noteload cardlistFilename
+	listItems = notemax-1
+
+*makeCardlist	;カードリスト生成
+	gsel ProgressWindow, 1
+	;プログレスバー設置
+	createProgressBar 0, 0, ginfo_winx, ginfo_winy
+	hProgress = stat	;ハンドル取得
+	setProgressRange 0, 100
+
+	gsel MainWindow, 0
+	createListView ginfo_winx, ginfo_winy - 48, WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, LVS_EX_GRIDLINES | LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP
+	CardListObjID = stat
+	hList = objinfo(CardListObjID, 2)
+
+	addListColumn "カードNo.", hList, 0, 75, 0
+	addListColumn "カード名称", hList, 0, 200, 1
+	addListColumn "カード種類", hList, 0, 75, 2
+	addListColumn "エナジー", hList, 0, 60, 3
+	addListColumn "パワー", hList, 0, 60, 4
+	addListColumn "スピード", hList, 0, 60, 5
+	addListColumn "スキル名称", hList, 0, 200, 6
+	addListColumn "スキル範囲", hList, 0, 150, 7
+	addListColumn "スキル説明", hList, 0, 200, 8
+	addListColumn "レアリティ", hList, 0, 75, 9
+	addListColumn "勢力", hList, 0, 75, 10
+	addListColumn "よみがな", hList, 0, 200, 11
+	addListColumn "イラストレーター", hList, 0, 150, 12
+	addListColumn "エクスパンション", hList, 0, 200, 13
+	addListColumn "最終修正日", hList, 0, 100, 14
+	addListColumn "修正内容", hList, 0, 200, 15
+
+	repeat listItems
+		sdim cardInfo, 512, 16
+		noteget temp_carditem, cnt
+		gosub *divideStringByComma
+		if ( result(0) == "カードNo." ) {
+			continue
+		}
+		foreach result
+			cardInfo(cnt) = result(cnt)
+		loop
+
+		addListItem cardInfo(0), hList, cnt		;アイテム追加
+		setListItem cardInfo(1), hList, cnt, 1
+		setListItem cardInfo(2), hList, cnt, 2
+		setListItem cardInfo(3), hList, cnt, 3
+		setListItem cardInfo(4), hList, cnt, 4
+		setListItem cardInfo(5), hList, cnt, 5
+		setListItem cardInfo(6), hList, cnt, 6
+		setListItem cardInfo(7), hList, cnt, 7
+		setListItem cardInfo(8), hList, cnt, 8
+		setListItem cardInfo(9), hList, cnt, 9
+		setListItem cardInfo(10), hList, cnt, 10
+		setListItem cardInfo(11), hList, cnt, 11
+		setListItem cardInfo(12), hList, cnt, 12
+		setListItem cardInfo(13), hList, cnt, 13
+		setListItem cardInfo(14), hList, cnt, 14
+		setListItem cardInfo(15), hList, cnt, 15
+
+		progress = (cnt*100) / listItems	;進捗算出
+		setProgressPosition hProgress, progress	;位置設定
+	loop
+	setProgressPosition hProgress, 100
+
+	font msgothic, 12, 16
+	objmode 2
+	objsize ginfo_winx, 24
+	pos 0, ginfo_winy - 48 : button gosub "デッキへ追加", *addDeck
+	objsize ginfo_winx / 2, 24
+	pos 0, ginfo_winy - 24 : button "フィルタ設定", *setFilter
+	pos ginfo_winx / 2, ginfo_winy - 24 : button "検索", *setSearch
+	objsize
+
+	GetClassLong hWnd, GCL_STYLE
+	SetClassLong hWnd, GCL_STYLE, stat | CS_DBLCLKS
+
+	hMenu = CreatePopupMenu()	;メニュー作成
+	dim mii, 12
+	mii(0) = 48	;cbSize
+	mii(1) = MIIM_ID | MIIM_STRING | MIIM_FTYPE	;fMask
+	mii(2) = MFT_STRING	;fType
+	mii(4) = AddToDeck	;wId
+	dwTypeData = "デッキへ追加"
+	mii(9) = varptr(dwTypeData)		;dwTypeData
+	mii(10) = strlen(dwTypeData)	;cch
+	InsertMenuItem hMenu, 0, TRUE, varptr(mii)
+
+	mii(4) = SearchBy	;wId
+	dwTypeData = "この項目の内容で検索"
+	mii(9) = varptr(dwTypeData)
+	mii(10) = strlen(dwTypeData)
+	InsertMenuItem hMenu, 1, TRUE, varptr(mii)
+
+	oncmd gosub *checkMessage, WM_NOTIFY
+	oncmd gosub *drawContextMenu, WM_CONTEXTMENU
+	onexit gosub *cleanup	;クリーンアップ（メニューの破棄）
+
+	wait 100
+	gsel ProgressWindow, -1	;プログレスバー消去
+
+
+*makeCardWindow		;カード情報ウィンドウ生成
+	gsel CardInfoWindow, 0
+
+	font msgothic, 12, 16
+	objmode 2
+	objsize 64, 18
+
+	redraw 0
+
+	pos 0, 0 : mes "カードNo."
+	mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+5, 4 : input selectedCardInfo(0), 50 : cardDataId(0) = stat
+
+	pos (mesWidth(0)+50) + 25, 0 : mes "カード名称"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos (mesWidth(1)+50)+(mesWidth(0)+5) + 25 , 4 : input selectedCardInfo(1), ginfo_winx - ((mesWidth(1)+50)+(mesWidth(0)+5) + 25)
+	cardDataId(1) = stat
+
+	pos (mesWidth(1)+50)+25, 18 : mes "よみがな"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos (mesWidth(1)+50)+(mesWidth(0)+5) + 30 , 22 : input selectedCardInfo(11), ginfo_winx - ((mesWidth(1)+50)+(mesWidth(0)+5) + 30)
+	cardDataId(11) = stat
+
+	pos 0, 36 : mes "カード種類"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0), 40 : input selectedCardInfo(2), 75
+	cardDataId(2) = stat
+
+	pos 0, 54 : mes "エナジー/パワー/スピード"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0) + 2, 59 : input selectedCardInfo(16), 50
+	cardDataId(16) = stat
+
+	pos 0, 73 : mes "スキル名称"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 78 : input selectedCardInfo(6), 200
+	cardDataId(6) = stat
+
+	pos mesWidth(1)+125, 73 : mes "スキル範囲"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos (mesWidth(1)+212)+(mesWidth(0)+2), 78 : input selectedCardInfo(7), 100
+	cardDataId(7) = stat
+
+	pos 0, 91 : mes "スキル説明"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 96 : mesbox selectedCardInfo(8), ginfo_winx-(mesWidth(0)+2), 36
+	cardDataId(8) = stat
+
+	pos 0, 126 : mes "レアリティ"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 133 : input selectedCardInfo(9), 30
+	cardDataId(9) = stat
+
+	pos 0, 144 : mes "勢力"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 151 : input selectedCardInfo(10), 75
+	cardDataId(10) = stat
+
+	pos 0, 162 : mes "イラストレーター"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 169 : input selectedCardInfo(12), 200
+	cardDataId(12) = stat
+
+	pos 0, 180 : mes "エクスパンション（入手方法）"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 187 : input selectedCardInfo(13), ginfo_winx - mesWidth(0)+2
+	cardDataId(13) = stat
+
+	pos 0, 198 : mes "最終修正日"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 205 : input selectedCardInfo(14), 200
+	cardDataId(14) = stat
+
+	pos 0, 216 : mes "修正内容"
+	mesWidth(1) = mesWidth(0) : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, 223 : input selectedCardInfo(15), ginfo_winx-(mesWidth(0)+2)
+	cardDataId(15) = stat
+
+	foreach cardDataId
+		if (cnt <= 5)&(cnt >= 3) {
+			continue
+		}
+		sendmsg objinfo(cardDataId(cnt), 2), EM_SETREADONLY, -1, 0
+	loop
+
+	redraw 1
+
+
+*makeDeckWindow	;デッキウィンドウ生成
+	gsel DeckWindow, 0
+	font msgothic, 12, 16
+	objmode 2
+	objsize 64, 18
+
+	redraw 0
+
+	pos 0, 24 : createListView ginfo_winx, ginfo_winy - 162, WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, LVS_EX_GRIDLINES | LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP
+	DeckListObjID = stat
+	hDeckList = objinfo(DeckListObjID, 2)
+
+	addListColumn "カードNo.", hDeckList, 0, 75, 0
+	addListColumn "カード名称", hDeckList, 0, 200, 1
+	addListColumn "カード種類", hDeckList, 0, 75, 2
+	addListColumn "エナジー", hDeckList, 0, 60, 3
+	addListColumn "パワー", hDeckList, 0, 60, 4
+	addListColumn "スピード", hDeckList, 0, 60, 5
+	addListColumn "スキル名称", hDeckList, 0, 200, 6
+	addListColumn "スキル範囲", hDeckList, 0, 150, 7
+	addListColumn "勢力", hDeckList, 0, 75, 8
+
+	pos 0, ginfo_winy-144 : mes "コスト合計（総計）" : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, ginfo_winy-138 : input energyTotal, 50
+	deckInfoId(0) = stat
+
+	pos (mesWidth(0)+2)+65, ginfo_winy-144 : mes "コスト合計（オルタなし）" : mesWidth(0) = ginfo_mesx
+	pos ((mesWidth(0)+2)+20)+(ginfo_mesx)+14, ginfo_winy-138 : input characterEnergyTotal, 50
+	deckInfoId(1) = stat
+
+	pos 0, ginfo_winy-126 : mes "コスト平均（総計）" : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, ginfo_winy-120 : input energyAverage, 50
+	deckInfoId(2) = stat
+
+	pos (mesWidth(0)+2)+65, ginfo_winy-126 : mes "コスト平均（オルタなし）"
+	pos ((mesWidth(0)+2)+20)+(ginfo_mesx)+50, ginfo_winy-120 : input energyAverageWithoutAlteration, 50
+	deckInfoId(3) = stat
+
+	pos 0, ginfo_winy-108 : mes "コストバランス"
+	pos ginfo_mesx+2, ginfo_winy-102 : input energyBalance, 50
+	deckInfoId(4) = stat
+
+	pos 0, ginfo_winy-88 : mes "パワー平均" : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, ginfo_winy-82 : input powerAverage, 50
+	deckInfoId(5) = stat
+
+	pos (mesWidth(0)+2)+75, ginfo_winy-88 : mes "スピード平均"
+	pos ((mesWidth(0)+2)+20)+(ginfo_mesx)+60, ginfo_winy-82 : input speedAverage, 50
+	deckInfoId(6) = stat
+
+	pos 0, ginfo_winy-70 : mes "上昇レベル" : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+2, ginfo_winy-62 : input energyLevel, 25
+	deckInfoId(7) = stat
+
+	pos (mesWidth(0)+2)+75, ginfo_winy-70 : mes "開幕エナジー"
+	pos ((mesWidth(0)+2)+20)+(ginfo_mesx)+60, ginfo_winy-62 : input startingEnergy, 50
+	deckInfoId(8) = stat
+
+	pos 0, ginfo_winy - 52 : mes "自然増加" : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0)+14, ginfo_winy - 42 : input increaseEnergyNatural, 50
+	deckInfoId(9) = stat
+	objprm deckInfoId(9), strf("%1.2f", increaseEnergyNatural)
+
+	pos (mesWidth(0)+2)+87, ginfo_winy - 52 : mes "静止状態"
+	pos ((mesWidth(0)+2)+20)+ginfo_mesx+95, ginfo_winy - 42 : input increaseEnergyStanding, 50
+	deckInfoId(10) = stat
+
+	pos 0, ginfo_winy - 34 : mes "MB被ダメージ" : mesWidth(0) = ginfo_mesx
+	pos mesWidth(0) + 2, ginfo_winy - 26 : input increaseEnergyDamaged, 50
+	deckInfoId(11) = stat
+
+	foreach deckInfoId
+		sendmsg objinfo(deckInfoId(cnt), 2), EM_SETREADONLY, -1, 0
+	loop
+
+	objsize ginfo_winx, 24
+	pos 0, 0 : button gosub "デッキから削除", *deleteDeck
+
+	redraw 1
+
+
+*readyOperate	;準備完了
+	gsel CardInfoWindow, 1	;カード情報ウィンドウ表示
+	gsel DeckWindow, 1	;デッキウィンドウ表示
+	gsel MainWindow, 1	;カードリストウィンドウ表示
+
+*checkSelectedCardChanged	;カードリストウィンドウの選択アイテム変更チェック
+	findSelectedItem hList, -1
+	if stat != -1 {
+		selectedItem = stat		;選択アイテム変更
+		if pastSelectedItem != selectedItem {	;前回チェック時と選択アイテムが異なる場合
+			pastSelectedItem = selectedItem		;前回チェック時のアイテムとして記録
+			gosub *redrawCardInfo	;カード情報再描画
+		}
+	}
+	wait 1
+	goto *checkSelectedCardChanged
+
+*redrawCardInfo
+	gsel CardInfoWindow, 0
+	sdim selectedCardInfo, 512, 17	;とりあえず初期化
+	noteget temp_carditem, selectedItem		;取得
+	gosub *divideStringByComma
+	foreach result
+		selectedCardInfo(cnt) = result(cnt)
+	loop
+
+	if selectedCardInfo(2) == "Character" {	;キャラクターの場合のみ"X/X/X"の形にする
+		selectedCardInfo(16) = selectedCardInfo(3)+"/"+selectedCardInfo(4)+"/"+selectedCardInfo(5)
+	} else {	;オルタレーションの場合はそのままコピー
+		selectedCardInfo(16) = selectedCardInfo(3)
+	}
+
+	foreach cardDataId
+		if (cnt <= 5)&(cnt >= 3) {
+			continue
+		}
+		objprm cardDataId(cnt), selectedCardInfo(cnt)
+	loop
+
+	return
+
+
+*addDeck	;デッキカードリストへ追加
+	findSelectedItem hList, -1	;選択カード検索
+	if stat == -1 {		;何も選択されていない場合は戻る
+		return
+	} else {
+		selectedItem = stat
+	}
+	sdim selectedCardInfo, 512, 17	;初期化
+	noteget temp_carditem, selectedItem	;取得
+	gosub *divideStringByComma
+	foreach result
+		selectedCardInfo(cnt) = result(cnt)
+	loop
+
+	switch selectedCardInfo(2)
+	case "Character"	;カード種別がキャラクター
+		if NoOfCharacter == 5 {	;制限チェック
+			dialog "キャラクターカードは５枚までです。", 1, "制限オーバー"
+			return
+		}
+		addingIndex = NoOfCharacter
+		gosub *addItemToDeckList
+
+		NoOfCharacter++	;キャラクターカード枚数加算
+		characterEnergyTotal += int(selectedCardInfo(3))	;キャラクターカードコスト総計加算
+		powerTotal += int(selectedCardInfo(4))	;パワー総計加算
+		speedTotal += int(selectedCardInfo(5))	;スピード総計加算
+		if int(selectedCardInfo(3)) <= 2 {	;低コスト
+			lowEnergy++
+		}
+		if int(selectedCardInfo(3)) == 3 {	;中コスト
+			middleEnergy++
+		}
+		if int(selectedCardInfo(3)) >= 4 {	;高コスト
+			highEnergy++
+		}
+		logmes "Character-card Added.
+		swbreak
+	case "Alteration"
+		if NoOfAlteration == 2 {	;制限チェック
+			dialog "オルタレーションカードは２枚までです。", 1, "制限オーバー"
+			return
+		}
+		addingIndex = 5 + NoOfAlteration
+		gosub *addItemToDeckList
+
+		NoOfAlteration++	;オルタレーションカード枚数加算
+		logmes "Alteration-card Added."
+		swbreak
+;	case "MindBreaker"
+	default	;"MindBreaker"含む
+		return
+		swbreak
+	swend
+
+	energyTotal += int(selectedCardInfo(3))	;コスト総計加算
+
+	NoOfDeck++
+	gosub *checkInfluence	;勢力チェック
+	NoOfDeckClassifiedInfluence(influenceNum)++	;勢力別のカード数加算
+	if NoOfDeckClassifiedInfluence(influenceNum) == 1 {
+		NoOfDeckInfluence++
+	}
+
+	gosub *renewalDeckdata
+
+	return
+
+*addItemToDeckList
+	addingIndex = NoOfDeck	;暫定処理
+	addListItem selectedCardInfo(0), hDeckList, addingIndex		;アイテム追加
+	setListItem selectedCardInfo(1), hDeckList, addingIndex, 1
+	setListItem selectedCardInfo(2), hDeckList, addingIndex, 2
+	setListItem selectedCardInfo(3), hDeckList, addingIndex, 3
+	setListItem selectedCardInfo(4), hDeckList, addingIndex, 4
+	setListItem selectedCardInfo(5), hDeckList, addingIndex, 5
+	setListItem selectedCardInfo(6), hDeckList, addingIndex, 6
+	setListItem selectedCardInfo(7), hDeckList, addingIndex, 7
+	setListItem selectedCardInfo(10), hDeckList, addingIndex, 8
+
+	return
+
+*deleteDeck	;デッキカードリストから削除
+	findSelectedItem hDeckList, -1	;選択カード検索
+	if stat == -1 {		;何も選択されていない場合は戻る
+		logmes "Nothing selected."
+		return
+	} else {
+		selectedItem = stat
+	}
+	sdim decklistItem_cardNo, 16
+	getListItem decklistItem_cardNo, hDeckList, selectedItem, 0, 16
+	selectedItem_deck = int(decklistItem_cardNo)-1
+
+	sdim selectedCardInfo, 512, 17	;初期化
+	noteget temp_carditem, selectedItem_deck	;取得
+	gosub *divideStringByComma
+	foreach result
+		selectedCardInfo(cnt) = result(cnt)
+	loop
+
+	switch selectedCardInfo(2)
+	case "Character"	;カード種別がキャラクター
+		NoOfCharacter--	;キャラクター数減算
+		characterEnergyTotal -= int(selectedCardInfo(3))	;キャラクターカードコスト総計減算
+		powerTotal -= int(selectedCardInfo(4))	;パワー総計減算
+		speedTotal -= int(selectedCardInfo(5))	;スピード総計減算
+		if int(selectedCardInfo(3)) <= 2 {	;低コスト
+			lowEnergy--
+		}
+		if int(selectedCardInfo(3)) == 3 {	;中コスト
+			middleEnergy--
+		}
+		if int(selectedCardInfo(3)) >= 4 {	;高コスト
+			highEnergy--
+		}
+		logmes "Character-card deleted."
+		swbreak
+	case "Alteration"	;オルタレーション
+		NoOfAlteration--
+		logmes "Alteration-card deleted."
+		swbreak
+	swend
+	energyTotal -= int(selectedCardInfo(3))	;コスト総計減算
+
+	NoOfDeck--
+	gosub *checkInfluence	;勢力チェック
+	NoOfDeckClassifiedInfluence(influenceNum)--	;勢力別のカード数減算
+	if NoOfDeckClassifiedInfluence(influenceNum) == 0 {
+		NoOfDeckInfluence--
+	}
+
+	deleteItem hDeckList, selectedItem
+	if ( stat == 0 ) {
+		dialog "削除に失敗しました。", 1, "エラー"
+	}
+
+	gosub *renewalDeckData
+
+	return
+
+
+*setFilter	;フィルタ設定
+	gsel FilteringSettingWindow, 1
+	cls
+	pos 0, 0
+	mes "フィルタ設定"
+	objsize ginfo_winx / 2, 24
+	pos 0, ginfo_winy - 24 : button "完了", *applyFilterSetting
+	pos ginfo_winx / 2, ginfo_winy - 24 : button "キャンセル", *cancelFilterSetting
+	stop
+
+*applyFilterSetting
+	gsel FilteringSettingWindow, -1
+	gsel MainWindow, 0
+	goto *checkSelectedCardChanged
+
+*cancelFilterSetting
+	gsel FilteringSettingWindow, -1
+	gsel MainWindow, 0
+	goto *checkSelectedCardChanged
+
+*setSearch	;検索設定
+	gsel SearchSettingWindow, 1
+	cls
+	pos 0, 0
+	mes "検索設定"
+	mes "検索キーワード"
+	pos , ginfo_cy + 10 : input searchKeyword, ginfo_winx
+	mes "検索モード"
+	objsize 100
+	pos , ginfo_cy + 10 : combox searchMode, 100, "完全一致\n部分一致"
+;	mes "検索項目数"
+;	objsize 100
+;	pos , ginfo_cy + 10 : combox searchType, 100, "１つ\n全て"
+	mes "検索開始位置（0を指定すると最初から）"
+	pos , ginfo_cy + 10 : input startingIndex, 100
+	objsize ginfo_winx / 2, 24
+	pos 0, ginfo_winy - 24 : button "検索", *applySearchSetting
+	pos ginfo_winx / 2, ginfo_winy - 24 : button "キャンセル", *cancelSearchSetting
+	stop
+
+*applySearchSetting
+	cls
+	mes "検索中……"
+	startingIndex = int(startingIndex)
+	if ( startingIndex < 0 ) {
+		startingIndex = 0
+	}
+
+	foundIndex = -1
+	repeat -1, startingIndex
+		if ( listItems < cnt ) {
+			break
+		}
+		noteget searchTemp, cnt
+		if searchMode {
+			if ( instr(searchTemp, 0, searchKeyword) != -1 ) {
+				foundIndex = cnt
+			}
+		} else {
+			upCnt = cnt
+			temp_carditem = searchTemp
+			gosub *divideStringByComma
+			foreach result
+				if ( result(cnt) == searchKeyword ) {
+					foundIndex = upCnt
+				}
+			loop
+		}
+		if ( foundIndex != -1 ) {
+			break
+		}
+	loop
+
+	gsel SearchSettingWindow, -1
+	gsel MainWindow, 0
+	if ( foundIndex == -1 ) {
+		dialog "指定されたアイテムは見つかりませんでした。", 0, "該当なし"
+	} else {
+		objsel CardListObjID
+		selectItem hList, foundIndex
+		EnsureVisible hList, foundIndex, TRUE
+	}
+	goto *checkSelectedCardChanged
+
+*cancelSearchSetting
+	gsel SearchSettingWindow, -1
+	gsel MainWindow, 0
+	goto *checkSelectedCardChanged
+
+*renewalDeckdata	;デッキ情報更新
+;上昇レベル・開幕エナジー算出
+	if NoOfDeck == 0 {
+		energyLevel = 0
+		startingEnergy = 0
+	} else {
+		energyLevel = 7 - NoOfDeckInfluence
+		startingEnergy = 3.0 / NoOfDeckInfluence
+	}
+;増加量算出
+	if ( NoOfDeck == 0 ) {
+		increaseEnergyStanding = 0
+		increaseEnergyDamaged = 0
+	} else {
+		increaseEnergyStanding = 12.0 * (0.05 - (double(NoOfDeckInfluence) / 200))	;12.0は１カウントに換算するもの
+		increaseEnergyDamaged = 20.0 * 0.02 / NoOfDeckInfluence	;20.0は被ダメージ量
+	}
+
+;コスト平均算出
+	if NoOfDeck == 0 {
+		energyAverage = 0
+		energyAverageWithoutAlteration = 0
+	} else {
+		energyAverage = double(energyTotal)/NoOfDeck	;総計平均
+		if NoOfCharacter != 0 {
+			energyAverageWithoutAlteration = double(characterEnergyTotal)/NoOfCharacter	;キャラクターのみの平均
+		}
+	}
+
+;コストバランス
+	energyBalance = ""+lowEnergy+"-"+middleEnergy+"-"+highEnergy
+
+;パワー平均
+	if (NoOfDeck == 0)|(NoOfCharacter == 0) {
+		powerAverage = 0
+	} else {
+		powerAverage = double(powerTotal)/NoOfCharacter
+	}
+
+;スピード平均
+	if (NoOfDeck == 0)|(NoOfCharacter == 0) {
+		speedAverage = 0
+	} else {
+		speedAverage = double(speedTotal)/NoOfCharacter
+	}
+
+;表示更新
+	gsel DeckWindow, 0
+	objprm deckInfoId(0), energyTotal
+	objprm deckInfoId(1), characterEnergyTotal
+	objprm deckInfoId(2), strf("%1.2f", energyAverage)
+	objprm deckInfoId(3), strf("%1.2f", energyAverageWithoutAlteration)
+	objprm deckInfoId(4), energyBalance
+	objprm deckInfoId(5), strf("%1.2f", powerAverage)
+	objprm deckInfoId(6), strf("%1.2f", speedAverage)
+	objprm deckInfoId(7), energyLevel
+	objprm deckInfoId(8), strf("%1.2f", startingEnergy)
+	objprm deckInfoId(9), strf("%1.2f", increaseEnergyNatural)
+	objprm deckInfoId(10), strf("%1.2f", increaseEnergyStanding)
+	objprm deckInfoId(11), strf("%1.2f", increaseEnergyDamaged)
+
+	return
+
+
+*checkInfluence	;勢力チェック
+	switch selectedCardInfo(10)
+	case "E.G.O."
+		influenceNum = 0
+		swbreak
+	case "阿羅耶識"
+		influenceNum = 1
+		swbreak
+	case "WIZ-DOM"
+		influenceNum = 2
+		swbreak
+	case "ダークロア"
+		influenceNum = 3
+		swbreak
+	case "極星帝国"
+		influenceNum = 4
+		swbreak
+	case "イレイザー"
+		influenceNum = 5
+		swbreak
+	swend
+
+	return
+
+*divideStringbyComma
+;コンマ区切りの文字列を配列変数に分割して格納する。
+	sdim result, 1024
+	sub_readCount = 0
+	sourceSize = strlen(temp_carditem)
+
+	repeat
+		if (sourceSize <= sub_readCount) {
+			break
+		}
+
+		getstr result(cnt), temp_carditem, sub_readCount, ','
+		sub_readCount += strsize
+	loop
+
+	return
+
+
+*checkMessage
+;受け取ったメッセージをチェックする。
+	dupptr nmhdr, lparam, 12, 4
+
+	return
+
+
+*drawContextMenu
+	hMouseWnd = wParam	;クリック時にマウスカーソルの下にあるウィンドウのハンドル
+	xPos = getLowerWord(lParam)	;クリック時のマウスカーソル座標（キーボード入力の場合、x,y共に0xFFFF）
+	yPos = getUpperWord(lParam)	;この値はスクリーン座標系
+
+	findSelectedItem hList, -1
+	selectedItem = stat		;選択アイテム変更
+	if ( pastSelectedItem != selectedItem ) {	;前回チェック時と選択アイテムが異なる場合
+		pastSelectedItem = selectedItem		;前回チェック時のアイテムとして記録
+		gosub *redrawCardInfo	;カード情報再描画
+	}
+
+	logmes "Window Pos: ("+ginfo_wx1+", "+ginfo_wy1+"), ("+ginfo_wx2+", "+ginfo_wy2+")"
+	logmes "Mouse: "+xPos+", "+yPos
+
+	if ( (xPos == 0xFFFF) & (yPos == 0xFFFF) ) {
+		logmes "Display shortcut-menu from keyboard operation."
+		beforeActivatedWindowID = ginfo_act
+		gsel MainWindow, 0
+		xPos = ginfo_mx
+		yPos = ginfo_my
+		if ( beforeActivatedWindowID != -1 ) {
+			gsel beforeActivatedWindowID, 0
+		}
+		logmes "Mouse: "+xPos+", "+yPos
+		if ( (ginfo_wx1 > xPos) | (ginfo_wx2 < xPos) | (ginfo_wy1 > yPos) | (ginfo_wy2 < (yPos - 48)) ) {
+			logmes "Out of the window"
+			return
+		}
+	}
+;	if ( ((ginfo_wx1 < xPos) & (ginfo_wx2 > xPos)) & (((ginfo_wy2 - 48) < yPos) & (ginfo_wy2 > yPos)) ) {
+	if ( hMouseWnd != hList ) {
+		logmes "Clicked on the other windows(or objects)."
+		return
+	}
+
+	dim point, 2
+	point = xPos, yPos
+;	ScreenToClient hMainWindow, point
+	ht = HitTest(hList, point(0), point(1))
+	if ( ht != -1 ) {
+		selectItem hList, ht
+	} else {
+		logmes "Not on the listview."
+	}
+
+	TrackPopupMenu hMenu, TPM_RETURNCMD | TPM_LEFTBUTTON, xPos, yPos, 0, hMainWindow
+	selectedMenu = stat
+	logmes "Menu Selected. distinction: "+selectedMenu
+	switch selectedMenu
+	case AddToDeck
+		logmes "\"Add this card to deck\" was selected."
+		swbreak
+	case SearchBy
+		logmes "\"Search by value of this item\" was selected."
+		swbreak
+	default
+		logmes "Canceled or Occured error."
+		swbreak
+	swend
+
+	return
+
+
+*cleanup
+	if ( wparam >= 1 ) {
+		return
+	}
+	destroyMenu hMenu
+	end
